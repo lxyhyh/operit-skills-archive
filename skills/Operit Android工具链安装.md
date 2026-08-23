@@ -50,7 +50,7 @@ description: 在 Operit 的 Ubuntu（ARM64/aarch64）环境中从零安装或重
    ```bash
    exec /usr/bin/clang-18 --target=aarch64-linux-android<api> --sysroot=$NDK/.../sysroot -rtlib=compiler-rt --gcc-toolchain=$SYSROOT/usr -stdlib=libc++ ...
    ```
-   注意：a) 需要把 NDK 的 `libclang_rt.builtins-aarch64-android.a` 复制到系统 clang 的 `lib/linux/`，否则链接报 `-lgcc` 找不到；b) 工具链必须部署到 `prebuilt/linux-x86_64/bin`（构建系统硬编码此路径），原 x86_64 备份为 `bin.x86_64-orig`；c) 为多 ABI 生成 armv7a/x86_64/i686/riscv64 wrapper
+   注意：a) 需要把 NDK 的 `libclang_rt.builtins-aarch64-android.a` 复制到系统 clang 的 `lib/linux/`，否则链接报 `-lgcc` 找不到；b) 工具链必须部署到 `prebuilt/linux-x86_64/bin`（构建系统硬编码此路径），原 x86_64 备份为 `bin.x86_64-orig`；c) 为多 ABI 生成 armv7a/x86_64/i686/riscv64 wrapper；d) **勿遗漏 strip/调试工具**（llvm-strip、llvm-objcopy、llvm-symbolizer、llvm-objdump、llvm-readelf、llvm-dwarfdump 也要建 ARM64 wrapper：exec /usr/bin/llvm-<名>-18 "$@"；linux-x86_64/bin 与 linux-aarch64/bin 双份都要放，AGP hostTag 固定拼 linux-x86_64，部分探测按 JVM os.arch；漏掉 llvm-strip 的后果见踩坑 #9）
 
 ### 阶段 5：Gradle 全局加速与镜像
 
@@ -64,7 +64,18 @@ org.gradle.workers.max=6
 org.gradle.daemon=true
 org.gradle.daemon.idletimeout=7200000
 ```
-写入 `~/.gradle/init.gradle`（阿里云镜像，Gradle 9.x 写法：settingsEvaluated 内注入 pluginManagement/dependencyResolutionManagement 仓库；不要用 allprojects 方式，会与 settings 仓库模式冲突）
+写入 `~/.gradle/init.gradle`（阿里云镜像 + **ARM64 strip 任务修复**，Gradle 9.x 写法：settingsEvaluated 内注入 pluginManagement/dependencyResolutionManagement 仓库；不要用 allprojects 方式，会与 settings 仓库模式冲突）：
+   ```groovy
+   // 镜像：settingsEvaluated 内 maven 仓库（见踩坑 #5），写法用 name = 'x'; url = 'y' 赋值语法（见踩坑 #10）
+   // 必加：ARM64 下 AGP 会禁用 strip 任务导致 .so 无法打包进 APK（见踩坑 #9）
+   gradle.projectsEvaluated { g ->
+       g.rootProject.allprojects { p ->
+           p.tasks.configureEach { t ->
+               if (t.name.contains('strip')) { t.enabled = true }
+           }
+       }
+   }
+   ```
 
 ### 阶段 6：ccache（NDK C/C++ 加速）
 
@@ -90,7 +101,8 @@ org.gradle.daemon.idletimeout=7200000
 1. 跑 `verify-env.sh` 全绿
 2. 干净项目试构建：AGP 9.3.1 + compileSdk 36，`gradle :app:assembleDebug` 应 BUILD SUCCESSFUL
 3. NDK 试编译：`aarch64-linux-android35-clang -shared -o lib.so test.c` 产物应为 ARM aarch64 ELF
-4. 缓存验证：clean 后二次构建应显著加速（FROM-CACHE）
+4. （项目含 native 时）验证 .so 打包：`unzip -l <apk> | grep lib/` 应出现 `lib/<abi>/xxx.so`，`aapt2 dump badging <apk>` 应含 `native-code:`；没有则查踩坑 #9
+5. 缓存验证：clean 后二次构建应显著加速（FROM-CACHE）
 
 ## 约束边界
 
@@ -118,6 +130,18 @@ org.gradle.daemon.idletimeout=7200000
 6. **全局 vs 项目级配置**：`android.aapt2FromMavenOverride` 写在项目 `gradle.properties` 只对该项目生效；必须写 `~/.gradle/gradle.properties` 才对所有项目/新窗口生效。
 7. **build-tools 替换后验证**：替换 ARM64 工具后，用 `file <工具> | grep aarch64` + `<工具> version` + `aapt2 dump badging <apk>` 三重验证，避免"替换了但没用上"。
 8. **多架构 404 排查**：apt update 报 `binary-amd64/Packages 404` = 当前源不含该架构，检查 `[arch=...]` 限定与多架构源是否齐全（见阶段 1）。
+9. **AGP（8/9 通用）在 ARM64 环境禁用 strip 任务 → native .so 无法打包进 APK**（本环境实测，社区未见先例）：现象：构建成功但 APK 无 `lib/`（jniLibs 或 AAR 依赖的 .so 全部丢失）；日志 `> Task :app:stripDebugDebugSymbols SKIPPED` + `task onlyIf 'Task is enabled' is false`。定位：任务在配置阶段末期被 AGP 置 `enabled=false`（`afterEvaluate` 时仍为 true，任务图就绪时已 false）；`packageDebug` 的 native 输入是 `stripped_native_libs/<variant>/stripDebugDebugSymbols/out`，strip 不执行则该目录为空 → APK 无 .so。已验证与以下**无关**：构建/配置缓存、daemon、llvm-strip 文件是否存在、ndkVersion 是否声明、Manifest 的 extractNativeLibs、AGP 版本（8.13 与 9.3.1 均复现）。**修复**（已全局固化在 `~/.gradle/init.gradle`）：
+   ```groovy
+   gradle.projectsEvaluated { g ->
+       g.rootProject.allprojects { p ->
+           p.tasks.configureEach { t ->
+               if (t.name.contains('strip')) { t.enabled = true }
+           }
+       }
+   }
+   ```
+   前提：NDK bin 里 `llvm-strip` 等必须是可执行的 ARM64 wrapper（见阶段 4d），否则强制启用后运行时报缺工具。
+10. **init.gradle / Groovy DSL 空格赋值语法弃用**：`maven { name 'x'; url 'y' }` 在 Gradle 8/9 报 deprecation（Gradle 10 移除构建失败），应写 `maven { name = 'x'; url = 'y' }`。自查：`gradle <任务> --warning-mode all | grep -i deprecat` 应为 0。
 
 
 ## 参考
