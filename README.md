@@ -1,14 +1,14 @@
 # Operit Skills Archive
 
-这是从本地 Operit 环境归档的 Skill 文档仓库。仓库设置为 **Public（公开）**，用于个人备份与版本追踪。
+这是从本地 Operit 环境归档的 Skill 文档仓库。仓库设置为 **Public（公开）**，用于个人备份与版本追踪，遵循 Operit Skill 标准结构，可作为 Operit Skill 源直接导入。
 
 ## Archive Scope
 
 - 归档范围：`/sdcard/Download/Operit/skills/` 下的 57 个顶层 Skill 目录中的 `SKILL.md`。
-- 存放位置：`skills/<Skill 名称>.md`；文件名保留本地 Skill 原名称。
+- 存放位置：`skills/<Skill 名称>/SKILL.md`；目录名保留本地 Skill 原名称。
 - 排除内容：`skill-creator/examples/` 等示例子目录，以及 MCP 配置、沙盒包、角色卡、模型配置、Token 和其他平台内部资产。
 - 合规检查：已检查 frontmatter、重复名称和常见凭据模式；未发现疑似真实 API Key、Token、Cookie 或私钥。文档中的公开参考链接和示例路径按原文保留。
-- 生成时间：2026-08-22。
+- 生成时间：2026-08-22（仓库结构调整为 Operit 标准布局：2026-08-25）。
 
 ## Sources & Attribution（来源与归属）
 
@@ -24,4 +24,4 @@
 
 ## Contents
 
-每个 Markdown 文件对应一个顶层 Skill；`skill-creator/examples/weekly-report-generator/SKILL.md` 是示例文档，不作为独立 Skill 归档。
+每个目录对应一个顶层 Skill，目录内为 `SKILL.md`（Operit 标准结构）；`skill-creator/examples/weekly-report-generator/SKILL.md` 是示例文档，不作为独立 Skill 归档。
